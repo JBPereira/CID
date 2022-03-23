@@ -16,6 +16,7 @@ from sklearn.ensemble import ExtraTreesRegressor
 from sklearn.model_selection import ShuffleSplit
 from numpy.random import beta, gamma, normal, exponential, binomial, uniform
 from sklearn.preprocessing import quantile_transform, scale
+from pandas.plotting import scatter_matrix
 
 import random
 from CID import CIDGmm
@@ -45,7 +46,7 @@ def groupby_index(series):
 # Comparison Function
 ######################################################################################
 
-def compare_ranking_CID(data, y, random_state=0, train_size=0.8, quant_transform=False,
+def compare_ranking_CID(data, y, random_state=0, train_size=0.9, quant_transform=False,
                         n_splits=100, n_perm_repeats=5, data_str='MVN'):
 
     br_kwargs = {'tol': 1e-6, 'fit_intercept': False, 'compute_score': True}
@@ -61,8 +62,11 @@ def compare_ranking_CID(data, y, random_state=0, train_size=0.8, quant_transform
         data_ = pd.DataFrame(quantile_transform(data_, n_quantiles=data_.shape[0],
                                                 output_distribution='normal'),
                              columns=data.columns)
-        y_ = pd.Series(quantile_transform(y_.values.reshape(-1,1), n_quantiles=data_.shape[0],
+        y_ = pd.Series(quantile_transform(y_.values.reshape(-1, 1), n_quantiles=data_.shape[0],
                                           output_distribution='normal').squeeze(), )
+
+        scatter_matrix(pd.concat([data_, y_], axis=1), hist_kwds={'bins': 50})
+        plt.show()
     else:
         y_ = pd.Series(y)
 
@@ -110,11 +114,11 @@ def compare_ranking_CID(data, y, random_state=0, train_size=0.8, quant_transform
 
     importances_permutation = np.array(importances_permutation)
     importances_clf = np.array(importances_clf)
-    cid_imps = ent_pi_df['mean_est_pis']
+    importances_cid = ent_pi_df['mean_est_pis']
 
     results_dict = {'perm': importances_permutation,
                     'clf': importances_clf,
-                    'cid': cid_imps}
+                    'cid': importances_cid}
 
     np.save(f'results_MVN', results_dict)
 
@@ -122,14 +126,17 @@ def compare_ranking_CID(data, y, random_state=0, train_size=0.8, quant_transform
     # Ordering importance
     ###############################################################################
 
-    cid_imps = groupby_index(cid_imps)
-
-    median_mi = np.median(cid_imps, axis=0)
+    importances_cid_df = groupby_index(importances_cid)
+    importances_clf_df = pd.DataFrame(importances_clf, columns=data.columns)
+    importances_permutation_df = \
+        pd.DataFrame(importances_permutation, columns=data.columns)
+    
+    median_mi = np.median(importances_cid_df.values, axis=0)
     median_perm = np.median(importances_permutation, axis=0)
     median_clf = np.median(importances_clf, axis=0)
 
     order_mi_imps = np.argsort(median_mi)
-    mi_df = pd.DataFrame(cid_imps, columns=data.columns)
+    mi_df = pd.DataFrame(importances_cid_df.values, columns=data.columns)
 
     order_imps = np.argsort(median_perm)
     permutation_df = pd.DataFrame(importances_permutation, columns=data.columns)
@@ -262,40 +269,51 @@ if __name__ == '__main__':
 
     quant_transform = True
 
-    n_samples = 800
-
-    X_1 = gamma(2, 2, size=n_samples)
-    X_2 = beta(.5, .5, size=n_samples)
-    X_3 = X_1 * X_2
-    X_4 = -exponential(.2, n_samples)
-    X_5 = np.sin(X_4)
-    X_7 = binomial(1, 0.7, n_samples)
-    X_8 = normal(-5, 1, n_samples)
-    X_9 = normal(5, 1, n_samples)
-    X_6 = X_7 * X_8 + (1-X_7)*X_9
-    vars_ = np.array([X_1, X_2, X_3, X_4, X_5, X_6]).T
+    np.random.seed(0)
+    n_samples = 2000
+    X_4 = beta(.5, .5, size=n_samples)
+    X_3 = gamma(.5, .5, size=n_samples)
+    X_2 = X_3 * X_4
+    X_5 = -exponential(.2, n_samples)
+    X_6 = np.sin(X_5)
+    X_8 = binomial(1, 0.7, n_samples)
+    X_9 = normal(-5, 1, n_samples)
+    X_10 = normal(5, 1, n_samples)
+    X_7 = X_8 * X_9 + (1-X_8)*X_10
+    X_1 = np.random.random(n_samples)
+    vars_ = np.array([X_1, X_2, X_3, X_4, X_5, X_6, X_7]).T
     vars_ = scale(vars_)
 
     y = uniform(0, 1, n_samples)
 
-    first_piece = np.argwhere(y <= 0.15).flatten()
-    second_piece = np.argwhere((y > 0.15) & (y <= 0.3)).flatten()
-    third_piece = np.argwhere((y > 0.3) & (y <= 0.5)).flatten()
-    fourth_piece = np.argwhere((y > 0.5) & (y <= 0.65)).flatten()
-    fifth_piece = np.argwhere((y > 0.65) & (y <= 0.75)).flatten()
-    sixth_piece = np.argwhere((y > 0.75) & (y <= 0.85)).flatten()
-    seventh_piece = np.argwhere((y > 0.85) & (y <= 0.95)).flatten()
-    eigth_piece = np.argwhere(y > 0.95).flatten()
+    relative_imp = [.375, .125, .075, .05, .125, .075, .075, .025, 0.075]  
+    relative_imp /= np.sum(relative_imp)
+    print(relative_imp)
+    cum_rel_imp = np.cumsum(relative_imp)
+    print(cum_rel_imp)
+    first_piece = np.argwhere(y <= cum_rel_imp[0]).flatten()
+    second_piece = np.argwhere((y > cum_rel_imp[0]) & (y <= cum_rel_imp[1])).flatten()
+    third_piece = np.argwhere((y > cum_rel_imp[1]) & (y <= cum_rel_imp[2])).flatten()
+    fourth_piece = np.argwhere((y > cum_rel_imp[2]) & (y <= cum_rel_imp[3])).flatten()
+    fifth_piece = np.argwhere((y > cum_rel_imp[3]) & (y <= cum_rel_imp[4])).flatten()
+    sixth_piece = np.argwhere((y > cum_rel_imp[4]) & (y <= cum_rel_imp[5])).flatten()
+    seventh_piece = np.argwhere((y > cum_rel_imp[5]) & (y <= cum_rel_imp[6])).flatten()
+    eigth_piece = np.argwhere((y > cum_rel_imp[6]) & (y <= cum_rel_imp[7])).flatten()
     y[first_piece], y[second_piece], y[third_piece], \
-    y[fifth_piece], y[sixth_piece], y[eigth_piece] = vars_[first_piece, 0], vars_[second_piece, 1], \
-                                                      vars_[third_piece, 2], vars_[fifth_piece, 3],\
-                                                      vars_[sixth_piece, 4], vars_[eigth_piece, 5]
-    y[fourth_piece], y[seventh_piece] = (vars_[fourth_piece, 0] + vars_[fourth_piece, 1] + vars_[fourth_piece, 2]), \
-                                        (vars_[seventh_piece, 3] + vars_[seventh_piece, 4])
+    y[fourth_piece], y[sixth_piece], y[seventh_piece], y[ninth_piece] = vars_[first_piece, 0], vars_[second_piece, 1], \
+                                                      vars_[third_piece, 2], vars_[fourth_piece, 3],\
+                                                      vars_[sixth_piece, 4], vars_[seventh_piece, 5], vars_[ninth_piece, 6]
+    y[fifth_piece], y[eigth_piece] = (vars_[fifth_piece, 1] + vars_[fifth_piece, 2] + vars_[fifth_piece, 3]), \
+                                        (vars_[eigth_piece, 4] + vars_[eigth_piece, 5])
 
     y = scale(y)
-    data = pd.DataFrame(vars_,
-                        columns=[f'X_{i}' for i in range(1, 7)])
-    y = pd.Series(y)
+        data = pd.DataFrame(vars_,
+                        columns=[f'X_{i}' for i in range(1, 8)])
+    y = pd.Series(y, name='Y')
 
-    compare_ranking_CID(data, y, n_splits=200, quant_transform=True, data_str='MV_non_normal')
+    axes = scatter_matrix(pd.concat([data, y], axis=1), hist_kwds={'bins': 20})
+    corr = pd.concat([data, y], axis=1).corr().to_numpy()
+    for i, j in zip(*plt.np.triu_indices_from(axes, k=1)):
+        axes[i, j].annotate("%.3f" % corr[i, j], (0.8, 0.8), xycoords='axes fraction', ha='center', va='center')
+    plt.show()
+    compare_ranking_CID(data, y, n_splits=200, quant_transform=quant_transform, data_str='MV_non_normal')

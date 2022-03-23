@@ -9,7 +9,8 @@ from sklearn.covariance import GraphicalLassoCV
 from sklearn.preprocessing import scale
 from sklearn.metrics import mutual_info_score
 from joblib import Parallel, delayed
-
+from scipy.stats import multivariate_normal as mvn
+from tqdm import tqdm
 from sklearn.linear_model import BayesianRidge
 
 from CID_utils import identify_continuous_features, discretize_array
@@ -137,10 +138,11 @@ class CID(metaclass=ABCMeta):
         if self.ent_pi_df is None:
             self.ent_pi_df = pd.DataFrame([])
 
-        mean_mi_syn = np.sum(self.mi_syn_df.loc[test_inds, :].values, axis=0)
-        mean_me_syn = np.sum(self.me_syn_df.loc[test_inds, :].values, axis=0)
-        mean_me_cs = np.sum(self.me_cs_df.loc[test_inds, :].values, axis=0)
-        mean_mi_cs = np.sum(self.mi_cs_df.loc[test_inds, :].values, axis=0)
+        data_test_ratio = len(self.mi_syn_df.values) / len(test_inds)
+        mean_mi_syn = np.sum(self.mi_syn_df.loc[test_inds, :].values, axis=0) * data_test_ratio
+        mean_me_syn = np.sum(self.me_syn_df.loc[test_inds, :].values, axis=0) *data_test_ratio
+        mean_me_cs = np.sum(self.me_cs_df.loc[test_inds, :].values, axis=0)* data_test_ratio
+        mean_mi_cs = np.sum(self.mi_cs_df.loc[test_inds, :].values, axis=0)* data_test_ratio
         ent_pi_df_ = pd.DataFrame(np.vstack([mean_pis.reshape(1, -1),
                                              mean_mi_cs.reshape(1, -1),
                                              mean_mi_syn.reshape(1, -1),
@@ -151,7 +153,12 @@ class CID(metaclass=ABCMeta):
                                          'mean_mesyn'],
                                   columns=self.data.columns[:-1]).T
 
-        self.ent_pi_df = pd.concat([self.ent_pi_df, ent_pi_df_], axis=0)
+        ent_pi_df_baseline = pd.DataFrame(np.vstack([np.random.normal(0, 1) * 0.01 * np.min(np.abs(mean_pis)),
+                                                     np.zeros((4, 1))]),
+                                          index=['mean_pis', 'mean_mics', 'mean_misyn', 'mean_mecs',
+                                                 'mean_mesyn'],
+                                          columns=['random']).T  # to improve entopy/pi model stability
+        self.ent_pi_df = pd.concat([self.ent_pi_df, ent_pi_df_, ent_pi_df_baseline], axis=0)
 
     def predict_true_pis(self, model=None):
 
@@ -192,10 +199,13 @@ class CID(metaclass=ABCMeta):
         reg.fit(X_train, y_train)
         ymean, ystd = reg.predict(X_test, return_std=True)
         self.ent_pi_df['mean_est_pis'] = ymean
-        mean_df_br = self.ent_pi_df.groupby(level=0).mean()
-        std_df_br = self.ent_pi_df.groupby(level=0).std()
+                ent_pi_df_ = self.ent_pi_df.copy()
+        if 'random' in self.ent_pi_df.index:
+            ent_pi_df_.drop(['random'], axis=0, inplace=True)
 
-        return self.ent_pi_df, mean_df_br, std_df_br
+        mean_df_br = ent_pi_df_.groupby(level=0).mean()
+        std_df_br = ent_pi_df_.groupby(level=0).std()
+        return ent_pi_df_, mean_df_br, std_df_br
 
     def fit_predict_general_model(self, model, **model_kwargs):
 
@@ -218,31 +228,24 @@ class CID(metaclass=ABCMeta):
         return self.ent_pi_df, mean_df_br, std_df_br
 
     def _discretize_data_and_get_unique_values_table(self):
-
         """
         Data discretization
         :return: discretized data, the index of the continuous features and discrete features
         """
-
         data_ = self.data.copy()
-
         if self.cont_feats is None:
             self.cont_feats, self.discrete_feats = identify_continuous_features(data_)
-
-        values_table = dict(zip(np.arange(self.data.shape[1]), []))
-
+        values_table = {'cont_feats': pd.DataFrame(np.zeros((self.n_bins, len(self.cont_feats))),
+                                                   columns=self.cont_feats),
+                        'disc_feats': dict(zip(self.discrete_feats, []))}
         for i, cont_feat in enumerate(self.cont_feats):
             data_.iloc[:, cont_feat], unique_values = \
                 discretize_array(data_.iloc[:, cont_feat], n_bins=self.n_bins)
-            values_table[cont_feat] = unique_values
-
+            values_table['cont_feats'].loc[:, cont_feat] = unique_values
         if len(self.discrete_feats) > 0:
             for disc_feat in self.discrete_feats:
-                values_table[disc_feat] = np.unique(self.data.iloc[:, disc_feat])
-
-        self.values_table = values_table
-
-        return data_
+                values_table['disc_feats'].loc[:, disc_feat] = np.unique(self.data.iloc[:, disc_feat])
+        return data_, values_table
 
     def _get_neighbors(self, ind):
 
@@ -329,10 +332,12 @@ class CID(metaclass=ABCMeta):
         """
 
         n_feats = self.data.shape[1]
+        
+        print('\nSampling covered entropy terms\n')
 
         results = Parallel(n_jobs=self.n_jobs)(
             delayed(self._compute_covered_info)(feat_ind, sample_ids)
-            for feat_ind in range(n_feats - 1))
+            for feat_ind in tqdm(range(n_feats - 1)))
 
         results = dict(results)
 
@@ -428,7 +433,7 @@ class CIDGmm(CID):
 
         self.compute_gaussian_cov(**kwargs)
 
-        self.graph = np.array(np.abs(self.precision) > 0.05).astype(int)
+        self.graph = np.array(np.abs(self.precision) > 0.01).astype(int)
 
     def compute_n_neighbors(self):
 
@@ -466,8 +471,6 @@ class CIDGmm(CID):
 
         data = self.select_data_by_id(self.data, sample_ids)
 
-        from scipy.stats import multivariate_normal as mvn
-
         # Univariate normal probabilities
 
         p_xs = np.array([mvn.pdf(data[:, i], mean=self.mean[i],
@@ -496,15 +499,25 @@ class CIDGmm(CID):
 
         # Discretize data
 
-        self.data = self._discretize_data_and_get_unique_values_table()
+        data, values_table = self._discretize_data_and_get_unique_values_table()
 
         # Scale the data to have 0-mean unit variance after the discretization
 
         # Scale the data
 
         if self.scale_data:
-            self.data = pd.DataFrame(scale(self.data.values, with_std=True),
-                                     columns=self.data.columns)
+            from sklearn.preprocessing import StandardScaler as Scaler
+            scaler = Scaler()
+            data.iloc[:, self.cont_feats] = \
+                pd.DataFrame(scaler.fit_transform(data.values[:, self.cont_feats]),
+                             columns=self.data.columns)
+            self.data = data
+            values_table['cont_feats'] = scaler.transform(values_table['cont_feats'])
+            cont_table = {self.cont_feats[i]: values_table['cont_feats'][:, i]
+                              for i in range(len(self.cont_feats))}
+            disc_table = dict(zip(self.discrete_feats, values_table['disc_feats']))
+            cont_table.update(disc_table)
+            self.values_table = cont_table
 
     def fit(self, X=None, y=None, n_samples=0.5):
 
@@ -545,10 +558,20 @@ class CIDGmm(CID):
 
         sample_ids = np.random.choice(np.arange(M),
                                       int(n_samples * M), replace=False)
+        self.entropy_y = np.log(mvn.pdf(data.values[:, -1], mean=self.mean[-1],
+                                   cov=self.covariance[-1, -1])) / M
 
         self._compute_joint_y_pot_tensor()  # precompute the F matrix (potentials of clique c=(X_i, Y)) for each X_i
 
         self._compute_entropy_terms(sample_ids)
+
+    def map_value_to_discrete_pos(self, feat_ind, value):
+        if feat_ind in self.cont_feats:
+            value_pos = int(
+                (value - self.values_table[feat_ind][0]) / self.deltas[feat_ind] + 0.001)
+        else:  # lookup the value position
+            value_pos = np.argwhere(self.values_table[feat_ind] == value).flatten()[0]
+        return value_pos
 
     def _compute_covered_info(self, feat_ind, sample_ids):
 
@@ -572,11 +595,7 @@ class CIDGmm(CID):
 
                 x_sample = self.data.iloc[id, :].values
 
-                if feat_ind in self.cont_feats:
-                    x_value_pos = int(
-                        (x_sample[feat_ind] - self.values_table[feat_ind][0]) / self.deltas[feat_ind] + 0.001)
-                else:  # lookup the value position
-                    x_value_pos = np.argwhere(self.values_table[feat_ind] == x_sample[feat_ind]).flatten()[0]
+                x_value_pos = self.map_value_to_discrete_pos(feat_ind, x_sample[feat_ind])
                 y_value_pos = int((x_sample[-1] - self.values_table[y][0]) / self.deltas[-1] + 0.001)
 
                 F = self.y_pot_tensor[feat_ind]
