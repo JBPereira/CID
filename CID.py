@@ -199,7 +199,7 @@ class CID(metaclass=ABCMeta):
         reg.fit(X_train, y_train)
         ymean, ystd = reg.predict(X_test, return_std=True)
         self.ent_pi_df['mean_est_pis'] = ymean
-                ent_pi_df_ = self.ent_pi_df.copy()
+        ent_pi_df_ = self.ent_pi_df.copy()
         if 'random' in self.ent_pi_df.index:
             ent_pi_df_.drop(['random'], axis=0, inplace=True)
 

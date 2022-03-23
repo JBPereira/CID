@@ -105,7 +105,8 @@ def compare_ranking_CID(data, y, random_state=0, train_size=0.9, quant_transform
 
             mean_pis = np.mean(pis, axis=0)
             cid.update_ent_pi_matrix(test, mean_pis)  # update the entropy/PI matrix with the current split
-
+            print('\n\n')
+            print(cid.ent_pi_df.groupby(level=0).mean())
             pbar.update(1)
 
     ent_pi_df, mean_ent_pi, std_ent_pi = cid.predict_true_pis()
@@ -299,6 +300,8 @@ if __name__ == '__main__':
     sixth_piece = np.argwhere((y > cum_rel_imp[4]) & (y <= cum_rel_imp[5])).flatten()
     seventh_piece = np.argwhere((y > cum_rel_imp[5]) & (y <= cum_rel_imp[6])).flatten()
     eigth_piece = np.argwhere((y > cum_rel_imp[6]) & (y <= cum_rel_imp[7])).flatten()
+    ninth_piece = np.argwhere(y > cum_rel_imp[7]).flatten()
+
     y[first_piece], y[second_piece], y[third_piece], \
     y[fourth_piece], y[sixth_piece], y[seventh_piece], y[ninth_piece] = vars_[first_piece, 0], vars_[second_piece, 1], \
                                                       vars_[third_piece, 2], vars_[fourth_piece, 3],\
@@ -307,7 +310,7 @@ if __name__ == '__main__':
                                         (vars_[eigth_piece, 4] + vars_[eigth_piece, 5])
 
     y = scale(y)
-        data = pd.DataFrame(vars_,
+    data = pd.DataFrame(vars_,
                         columns=[f'X_{i}' for i in range(1, 8)])
     y = pd.Series(y, name='Y')
 
