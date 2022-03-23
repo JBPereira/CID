@@ -6,5 +6,5 @@ Run MV_comparison_CID.py for a demo showcasing how permutation importance is bia
 
 For a generated multivariate non-normal distribution with true importance I_1>I_2>I_3>I_4>I_5=I_6>I_7 this is the comparison of CID, permutation importance and gini importance:
 
-![MV_non_normal_CID_comparison](https://user-images.githubusercontent.com/22081993/136975247-688834bd-c7b3-4c86-baee-3da4958faa66.png)
+![MV_non_normal_CID_comparison](https://github.com/JBPereira/CID/blob/main/plots/MV_non_normal_CID_comparison.png)
 
